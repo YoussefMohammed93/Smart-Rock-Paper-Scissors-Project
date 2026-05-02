@@ -41,7 +41,8 @@ const aiEngine = {
     const r = gameState.round;
     if (r < 4) return 1;
     if (r < 9) return 2;
-    return 3;
+    if (r < 14) return 3;
+    return 4;
   },
 
   getCounter(move) {
@@ -133,6 +134,130 @@ const aiEngine = {
     }
   },
 
+  predictPlayerSequence(length) {
+    let seq = [];
+    let history = [...gameState.playerHistory];
+    for (let i = 0; i < length; i++) {
+      if (history.length < this.k) {
+        let pick = ["Rock", "Paper", "Scissors"][Math.floor(Math.random() * 3)];
+        seq.push(pick);
+        history.push(pick);
+        continue;
+      }
+      const lastK = history.slice(-this.k).join(",");
+      let pred = "Rock";
+      if (this.transitionTable[lastK]) {
+        const entry = this.transitionTable[lastK];
+        const maxProb = Math.max(entry.Rock, entry.Paper, entry.Scissors);
+        const topMoves = Object.keys(entry).filter((m) => entry[m] === maxProb);
+        pred = topMoves[Math.floor(Math.random() * topMoves.length)];
+      } else {
+        pred = ["Rock", "Paper", "Scissors"][Math.floor(Math.random() * 3)];
+      }
+      seq.push(pred);
+      history.push(pred);
+    }
+    return seq;
+  },
+
+  runSearch(algorithmName, playerSeq) {
+    const MOVES = ["Rock", "Paper", "Scissors"];
+    const MAX_DEPTH = playerSeq.length;
+
+    const getCost = (pMove, aMove) => {
+      if (pMove === aMove) return 1;
+      if (
+        (aMove === "Rock" && pMove === "Scissors") ||
+        (aMove === "Paper" && pMove === "Rock") ||
+        (aMove === "Scissors" && pMove === "Paper")
+      ) return 0;
+      return 10;
+    };
+
+    const getHeuristic = (depth) => (MAX_DEPTH - depth) * 0;
+
+    class SearchNode {
+      constructor(moves, cost, h, parent) {
+        this.moves = moves;
+        this.depth = moves.length;
+        this.cost = cost;
+        this.h = h;
+        this.f = cost + h;
+        this.parent = parent;
+      }
+    }
+
+    let startNode = new SearchNode([], 0, getHeuristic(0), null);
+    let openList = [startNode];
+    let bestNode = null;
+    let iterations = 0;
+
+    while (openList.length > 0) {
+      iterations++;
+      let current;
+
+      if (algorithmName === "BFS") {
+        current = openList.shift();
+      } else if (algorithmName === "DFS") {
+        current = openList.pop();
+      } else if (algorithmName === "UCS") {
+        openList.sort((a, b) => a.cost - b.cost);
+        current = openList.shift();
+      } else if (algorithmName === "Greedy") {
+        openList.sort((a, b) => a.h - b.h);
+        current = openList.shift();
+      } else if (algorithmName === "A*") {
+        openList.sort((a, b) => a.f - b.f);
+        current = openList.shift();
+      }
+
+      if (current.depth === MAX_DEPTH) {
+        if (algorithmName === "BFS" || algorithmName === "DFS") {
+          if (current.cost === 0) {
+            bestNode = current;
+            break;
+          }
+          if (!bestNode || current.cost < bestNode.cost) bestNode = current;
+        } else {
+          bestNode = current;
+          break;
+        }
+        continue;
+      }
+
+      for (let move of MOVES) {
+        let stepCost = getCost(playerSeq[current.depth], move);
+        let childNode = new SearchNode(
+          [...current.moves, move],
+          current.cost + stepCost,
+          getHeuristic(current.depth + 1),
+          current
+        );
+        openList.push(childNode);
+      }
+    }
+    return { bestNode, iterations };
+  },
+
+  level4() {
+    const playerSeq = this.predictPlayerSequence(3);
+    const algos = ["BFS", "DFS", "UCS", "Greedy", "A*"];
+    const algoName = algos[gameState.round % algos.length];
+
+    const searchResult = this.runSearch(algoName, playerSeq);
+    const aiSeq = searchResult.bestNode.moves;
+    const bestMove = aiSeq[0];
+
+    this.prediction = {
+      move: playerSeq[0],
+      confidence: "High (Search)",
+      strategy: `Predicted Player Seq: [${playerSeq.join(", ")}]. ${algoName} Search found optimal counter-seq [${aiSeq.join(", ")}] in ${searchResult.iterations} nodes. Playing ${bestMove}.`,
+      level: 4,
+      mode: `${algoName} Search over Markov`,
+    };
+    return bestMove;
+  },
+
   decide() {
     const level = this.getLevel();
     console.log(
@@ -146,6 +271,8 @@ const aiEngine = {
         return this.level2();
       case 3:
         return this.level3();
+      case 4:
+        return this.level4();
     }
   },
 
@@ -282,6 +409,7 @@ const uiRenderer = {
       1: "Level 1 — Reflex Agent",
       2: "Level 2 — Model-Based Agent",
       3: "Level 3 — Learning Agent",
+      4: "Level 4 — Search Agent",
     };
     this.els.aiLevelBadge.textContent = levelLabels[p.level] || levelLabels[1];
     this.els.aiMode.textContent = p.mode || "Random Selection";
@@ -469,7 +597,9 @@ function playRound(playerMove) {
         ? 1
         : gameState.round < 9
           ? 2
-          : 3
+          : gameState.round < 14
+            ? 3
+            : 4
       : 0;
   const aiMove = aiEngine.decide();
 
@@ -560,10 +690,27 @@ function playRound(playerMove) {
           aiEngine.prediction.mode = "Markov Model (k=2)";
         }
       }
+    } else if (nextLevel === 4) {
+      const history = gameState.playerHistory;
+      if (history.length >= aiEngine.k) {
+        const playerSeq = aiEngine.predictPlayerSequence(3);
+        const algos = ["BFS", "DFS", "UCS", "Greedy", "A*"];
+        const algoName = algos[gameState.round % algos.length];
+        const searchResult = aiEngine.runSearch(algoName, playerSeq);
+        const aiSeq = searchResult.bestNode.moves;
+
+        aiEngine.prediction = {
+          move: playerSeq[0],
+          confidence: "High (Search)",
+          strategy: `Next round: Predict player seq [${playerSeq.join(", ")}]. ${algoName} Search optimal counter is [${aiSeq.join(", ")}]. Will play ${aiSeq[0]}.`,
+          level: 4,
+          mode: `${algoName} Search over Markov`,
+        };
+      }
     }
     uiRenderer.updateAIPanel();
 
-    const newLevel = gameState.round < 4 ? 1 : gameState.round < 9 ? 2 : 3;
+    const newLevel = gameState.round < 4 ? 1 : gameState.round < 9 ? 2 : gameState.round < 14 ? 3 : 4;
     if (prevLevel > 0 && newLevel > prevLevel) {
       uiRenderer.showToast(
         `AI System upgraded to Level ${newLevel}!`,
@@ -617,3 +764,4 @@ document.addEventListener("DOMContentLoaded", () => {
   uiRenderer.init();
   initEvents();
 });
+
